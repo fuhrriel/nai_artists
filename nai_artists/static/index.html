@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nai_artists</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect width=%2716%27 height=%2716%27 rx=%273%27 fill=%27%237aa2f7%27/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <h1>nai_artists</h1>
+  <nav class="tabs" id="tabs">
+    <a href="#matrix" data-tab="matrix">Matrix</a>
+    <a href="#generate" data-tab="generate">Add artists</a>
+    <a href="#import" data-tab="import">Import</a>
+    <a href="#templates" data-tab="templates">Templates</a>
+  </nav>
+  <div class="spacer"></div>
+  <span id="battery-pill" class="pill" title="V5 battery (click to refresh)">battery …</span>
+  <button id="queue-pill" class="pill pill-btn" title="queue state (click to open the queue drawer, q)">…</button>
+  <button id="refresh" class="btn" title="re-fetch /api/matrix (r)">↻</button>
+</header>
+
+<main>
+  <section id="tab-matrix" class="tab">
+    <div class="toolbar">
+      <input type="search" id="mx-q" class="filter" placeholder="filter artists… ( / )" autocomplete="off" spellcheck="false">
+      <label class="dim">show
+        <select id="mx-show">
+          <option value="all">all</option>
+          <option value="unrated">unrated</option>
+          <option value="rated">rated</option>
+          <option value="good">rated ≥ +1</option>
+          <option value="fav">rated +2</option>
+          <option value="bad">rated −1</option>
+          <option value="stale">has stale cells</option>
+          <option value="missing">has missing cells</option>
+          <option value="combo">combos only</option>
+          <option value="single">singles only</option>
+          <option value="unlabeled">no labels</option>
+          <option value="norefs">no refs</option>
+        </select>
+      </label>
+      <span class="label-filter">
+        <button type="button" class="btn small" id="mx-labels" title="filter by label: include / exclude">labels ▾</button>
+        <div id="label-pop" class="popover" hidden>
+          <div class="row">
+            <button type="button" class="btn small" id="label-mode" title="rows need every included label (all) or at least one (any)">include: all</button>
+            <button type="button" class="btn small" id="label-clear">clear</button>
+          </div>
+          <ul id="label-pop-list" class="label-list"></ul>
+        </div>
+      </span>
+      <span id="mx-label-chips" class="lchips"></span>
+      <label class="dim">sort
+        <select id="mx-sort">
+          <option value="name">name</option>
+          <option value="rating">rating</option>
+          <option value="date">date added</option>
+        </select>
+      </label>
+      <button type="button" class="btn small" id="mx-dir" title="flip sort direction">↓</button>
+      <label class="dim">cell size <input type="range" id="cell-size" min="96" max="320" step="16" value="160"></label>
+      <label class="dim check" id="mx-nsfw-wrap" hidden title="questionable / explicit reference images are blurred unless this is on"><input type="checkbox" id="mx-nsfw"> nsfw refs</label>
+      <button type="button" class="btn small" id="mx-cols-reset" title="default column order, show every column (drag headers to reorder)">columns ↺</button>
+      <span id="matrix-info" class="dim"></span>
+      <button type="button" class="btn small" id="help-btn" title="keyboard shortcuts (?)">?</button>
+    </div>
+    <div class="matrix-wrap">
+      <table class="matrix" id="matrix"></table>
+    </div>
+  </section>
+
+  <section id="tab-generate" class="tab">
+    <div class="page">
+      <form class="panel" id="gen-form">
+        <h2>Add artists</h2>
+        <p class="dim small">Adds matrix rows, nothing else: no image is generated here. Every cell of a new row starts missing; click its ⟳ to generate that one image.</p>
+        <label class="field">
+          <span>artists, one per line · <code>artist:</code> optional · <code>a + b</code> for a combo</span>
+          <textarea id="gen-artists" rows="8" spellcheck="false" placeholder="wlop&#10;artist:ilya kuvshinov&#10;wlop + ilya kuvshinov"></textarea>
+        </label>
+        <div class="field suggest">
+          <input id="gen-suggest" type="search" placeholder="find a tag (NovelAI suggest)…" autocomplete="off">
+          <ul id="gen-suggest-list" class="suggest-list" hidden></ul>
+        </div>
+        <label class="check" id="gen-refs-wrap" hidden><input type="checkbox" id="gen-refs" checked> also fetch Gelbooru reference images for new single artists</label>
+        <div class="row">
+          <button type="submit" class="btn primary" id="gen-submit">Add artists</button>
+        </div>
+        <div id="gen-result" class="result"></div>
+      </form>
+      <aside class="panel side">
+        <h2>Battery</h2>
+        <div class="gauge" id="gauge"><div class="gauge-fill" id="gauge-fill"></div><span id="gauge-label">…</span></div>
+        <dl class="kv" id="battery-kv"></dl>
+        <button type="button" class="btn" id="battery-refresh" title="GET /api/subscription?fresh=1">refresh</button>
+        <p class="dim small">The gauge is coarse (one image rarely moves it). Rough budget: ~18 images per 1 %.</p>
+        <h2>Queue</h2>
+        <p class="dim small">Live in the drawer (<kbd>q</kbd>). Every click on a cell's ⟳ queues that one image; the queue sends them one at a time with a short gap, and checks the battery guard. Both come from <code>settings.toml</code>.</p>
+      </aside>
+    </div>
+  </section>
+
+  <section id="tab-import" class="tab">
+    <div class="page">
+      <div class="panel">
+        <h2>Import</h2>
+        <div class="drop" id="drop">
+          <p>drop PNGs here, or <label class="link">choose files<input type="file" id="imp-files" multiple accept="image/png,.png" hidden></label></p>
+          <p class="dim small" id="imp-count">no files selected</p>
+        </div>
+        <div class="row wrap">
+          <label class="field inline"><span>force-assign template</span>
+            <select id="imp-template"><option value="">auto (match prompt)</option></select>
+          </label>
+          <label class="check"><input type="checkbox" id="imp-replace"> replace existing cells</label>
+          <label class="check"><input type="checkbox" id="imp-dry"> dry run</label>
+          <button type="button" class="btn primary" id="imp-submit" disabled>Import</button>
+          <button type="button" class="btn" id="imp-clear">clear</button>
+        </div>
+        <table class="list" id="imp-results" hidden>
+          <thead><tr><th>file</th><th>status</th><th>template × artists</th><th>params</th><th>details</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <p class="dim small">Unmatched files land in <code>data/inbox/</code> untouched. Wrong seed / size is accepted and shown as <code>≠</code>. A file without <code>artist:</code> tokens is the baseline cell of its template.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-templates" class="tab">
+    <div class="page">
+      <div class="panel">
+        <h2>Templates</h2>
+        <p class="dim small">Files in <code id="tpl-dir"></code>. Toggles rewrite the front matter only; the prompt body stays byte-exact (hash unchanged). Edit bodies in your editor. New templates come from images: import results or the lightbox.</p>
+        <table class="list" id="tpl-table">
+          <thead><tr><th>id</th><th>name</th><th>primary</th><th>enabled</th><th>chars</th><th>images</th><th>stale</th><th>hash</th><th>file</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="row">
+          <button type="button" class="btn" id="tpl-refresh">refresh</button>
+          <button type="button" class="btn" id="tpl-new-file">new template from a PNG…</button>
+          <input type="file" id="tpl-file" accept="image/png,.png" hidden>
+        </div>
+        <h2>Settings</h2>
+        <p class="dim small">Read-only view of <code id="settings-file"></code>; <code>[pacing]</code> and <code>[battery]</code> are outside the template hash.</p>
+        <pre id="settings-view" class="code">…</pre>
+      </div>
+    </div>
+  </section>
+</main>
+
+<aside id="drawer" class="drawer" hidden>
+  <div class="drawer-head">
+    <strong id="drawer-title">queue</strong>
+    <span id="drawer-wait" class="dim"></span>
+    <div class="spacer"></div>
+    <button class="btn small" id="q-pause" title="POST /api/jobs/pause">pause</button>
+    <button class="btn small" id="q-resume" title="POST /api/jobs/resume (re-checks the battery first)">resume</button>
+    <button class="btn small" id="q-clear" title="POST /api/jobs/clear: drop every queued job">clear queued</button>
+    <button class="btn small" id="q-close" title="close (q)">✕</button>
+  </div>
+  <div id="drawer-reason" class="drawer-reason" hidden></div>
+  <div id="drawer-counts" class="dim small"></div>
+  <div id="drawer-refs" class="drawer-refs small" hidden></div>
+  <ol class="jobs" id="jobs"></ol>
+</aside>
+
+<dialog id="lb" class="lightbox">
+  <div class="lb-body">
+    <figure class="lb-fig">
+      <button class="lb-nav lb-prev" data-nav="left" title="previous template (←)">‹</button>
+      <div class="lb-pair">
+        <img id="lb-img" alt="">
+        <figure id="lb-ref" class="lb-ref" hidden title="reference image (r cycles; click a blurred one to reveal it)"></figure>
+      </div>
+      <button class="lb-nav lb-next" data-nav="right" title="next template (→)">›</button>
+      <figcaption id="lb-caption"></figcaption>
+    </figure>
+    <aside class="lb-side">
+      <div class="lb-head">
+        <div class="lb-artist" id="lb-artist"></div>
+        <div class="lb-actions">
+          <button class="btn" id="lb-copy" title="copy artist:tag">copy tag</button>
+          <button class="btn" id="lb-base" title="toggle baseline (b)">baseline</button>
+          <button class="btn" id="lb-regen" title="regenerate this cell (g)">regenerate</button>
+          <button class="btn" id="lb-newtpl" title="new template from this image's prompt (n)">new template</button>
+          <a class="btn" id="lb-open" target="_blank" rel="noopener" title="open the PNG in a new tab">png</a>
+          <button class="btn" id="lb-close" title="close (Esc)">✕</button>
+        </div>
+      </div>
+      <div class="lb-rating" id="lb-rating"></div>
+      <div class="lb-labels" id="lb-labels"></div>
+      <div class="lb-refs" id="lb-refs" hidden></div>
+      <dl class="lb-meta" id="lb-meta"></dl>
+      <div class="lb-prompts" id="lb-prompts"></div>
+      <div class="lb-keys dim">← → templates · ↑ ↓ artists · b baseline · r refs · l labels · c copy · − 0 1 2 rate cell · x clear · g regenerate · n new template · o png · ? help</div>
+    </aside>
+  </div>
+</dialog>
+
+<dialog id="nt" class="modal">
+  <form method="dialog" id="nt-form">
+    <h2>New template from image</h2>
+    <p class="dim small" id="nt-source"></p>
+    <label class="field"><span>id (filename stem, <code>templates/&lt;id&gt;.txt</code>)</span><input id="nt-id" required pattern="[A-Za-z0-9_\-]+" autocomplete="off"></label>
+    <label class="field"><span>name</span><input id="nt-name" autocomplete="off"></label>
+    <label class="check"><input type="checkbox" id="nt-primary"> primary</label>
+    <label class="check"><input type="checkbox" id="nt-force"> force: overwrite an existing template file / cell</label>
+    <div class="row">
+      <button type="submit" class="btn primary" value="ok">create</button>
+      <button type="button" class="btn" id="nt-cancel">cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="help" class="modal help">
+  <h2>Keyboard shortcuts</h2>
+  <table class="keys">
+    <tr><th colspan="2">anywhere</th></tr>
+    <tr><td><kbd>?</kbd></td><td>this help</td></tr>
+    <tr><td><kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> <kbd>4</kbd></td><td>matrix · add artists · import · templates</td></tr>
+    <tr><td><kbd>r</kbd></td><td>reload the matrix</td></tr>
+    <tr><td><kbd>q</kbd></td><td>toggle the queue drawer</td></tr>
+    <tr><td><kbd>/</kbd></td><td>focus the artist filter</td></tr>
+    <tr><td><kbd>Esc</kbd></td><td>close the drawer / dialog, clear the filter when it has focus</td></tr>
+    <tr><th colspan="2">matrix</th></tr>
+    <tr><td><kbd>s</kbd></td><td>cycle sort: name → rating → date</td></tr>
+    <tr><td><kbd>d</kbd></td><td>flip sort direction</td></tr>
+    <tr><td>click tag</td><td>copy <code>artist:tag</code> (shift-click: bare tag)</td></tr>
+    <tr><td>click column header</td><td>hide / show the column</td></tr>
+    <tr><td>drag column header</td><td>move the column (columns ↺ resets order and visibility)</td></tr>
+    <tr><td># on a row</td><td>edit its labels · click a label: include it in the filter, shift-click: exclude</td></tr>
+    <tr><td>refs column</td><td>top-scored Gelbooru posts; click one to compare it in the lightbox</td></tr>
+    <tr><td>⟳ on a cell</td><td>generate that one image · missing: enqueue · stale: regenerate in place · fresh: delete + regenerate (asks)</td></tr>
+    <tr><th colspan="2">lightbox</th></tr>
+    <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>same artist, other templates</td></tr>
+    <tr><td><kbd>↑</kbd> <kbd>↓</kbd></td><td>same template, other artists (follows the current sort / filter)</td></tr>
+    <tr><td><kbd>b</kbd></td><td>toggle against the baseline (no artist)</td></tr>
+    <tr><td><kbd>r</kbd></td><td>show the artist's reference images next to it, cycling ref 1 → 2 → 3 → off (kept while walking ↑ ↓)</td></tr>
+    <tr><td><kbd>l</kbd></td><td>edit labels (Enter adds, Backspace on empty removes the last, Esc leaves)</td></tr>
+    <tr><td><kbd>−</kbd> <kbd>0</kbd> <kbd>1</kbd> <kbd>2</kbd></td><td>rate this cell −1 … +2 (same key again clears)</td></tr>
+    <tr><td><kbd>x</kbd></td><td>clear the cell rating</td></tr>
+    <tr><td><kbd>c</kbd></td><td>copy the tag</td></tr>
+    <tr><td><kbd>g</kbd></td><td>regenerate this cell</td></tr>
+    <tr><td><kbd>n</kbd></td><td>new template from this image</td></tr>
+    <tr><td><kbd>o</kbd></td><td>open the PNG in a new tab</td></tr>
+  </table>
+  <form method="dialog"><button class="btn">close</button></form>
+</dialog>
+
+<datalist id="label-options"></datalist>
+<div id="toast" class="toast" hidden></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

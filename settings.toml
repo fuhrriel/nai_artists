@@ -1,0 +1,54 @@
+# Global generation settings. Applies to every template; templates cannot override.
+# Everything here except the [pacing], [battery] and [refs] tables is part of each template's hash: change a value
+# and existing images show as stale.
+# NOTE: TOML puts every key after a [table] header inside that table, so the tables stay last.
+
+model = "nai-diffusion-5-full"
+width = 1024
+height = 1024
+steps = 28
+scale = 5.0
+sampler = "k_euler_ancestral"
+noise_schedule = "karras"
+seed = 2137                 # one seed for the whole matrix
+
+# Prepended verbatim to every template body, {artist} replaced by the bare tag, one line per artist.
+# The comma before the closing :: is load-bearing: without it a name ending in digits
+# (artist:foo2::) would be parsed as a weight opener.
+artist_line = "::artist:{artist},::\n"
+
+# Full negative prompt, verbatim from the reference V5 images. Literal string: nothing is escaped,
+# double spaces and the ',,' are intentional (that's what the UI sent).
+negative = '''1.3::worst quality, bad quality, very displeasing, displeasing, lowres, artistic error, scan artifacts, jpeg artifacts, logo, signature, watermark,  blank page, aliasing,
+
+bad anatomy, unfinished, blurry, ych (character),  grandfathered content, deviantart, sketch, absolutely everyone, guide lines, sketch page,
+
+year 1997, year 2007,,
+
+flat colors, desaturated, monochrome, greyscale,
+
+multiple views, multiple scenes,
+
+gore, nightmare fuel, vore,
+
+censored, bar censor, mosaic censoring,
+
+1990s (style), 2000s (style), retro artstyle,
+
+out of focus, formal art, bloom,::
+
+  picture frame, poster, photo  where is your god now, what has science done, what, why, transformation,  mess, trash, messy room,  bad feet, extra digits, fewer digits, missing limb, extra limb, bad hands,  sunbeam, diffused lighting, studio lighting,  abstract, abstract background, psychedelic, acid trip, far,'''
+
+[pacing]                    # requests are spaced out to keep load on NovelAI's servers low
+gap_ms = 2000               # milliseconds the queue waits after every generation before sending the next one
+
+[battery]                   # V5 Opus battery guard (usage.percent on /user/subscription)
+check_every = 10            # re-fetch subscription after this many generated images
+min_percent = 5             # at or below this, suspend the queue / stop the CLI until resumed
+anlas_per_image = 30        # battery empty (0 % / negative): never start an image with less Anlas than this, forced or not
+
+[refs]                      # Gelbooru reference images; needs GELBOORU_API_KEY + GELBOORU_USER_ID in .env
+count = 3                   # top-scored posts kept per artist
+extra_tags = "-video -animated -comic"   # appended to every search, e.g. add "-rating:explicit"
+use_sample = false          # true: download Gelbooru's ~850px sample instead of the original file
+per_second = 8              # every Gelbooru request (search + downloads), evenly spaced; Gelbooru allows 10/s

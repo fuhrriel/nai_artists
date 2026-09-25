@@ -1,0 +1,4 @@
+# LF everywhere, also on Windows checkouts: templates and settings.toml are hashed and diffed.
+* text=auto eol=lf
+*.png binary
+*.webp binary

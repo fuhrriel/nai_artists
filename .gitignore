@@ -1,0 +1,27 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# generated images, db, thumbs, inbox, similarity output
+/data/
+
+# your own templates (start from examples/templates/)
+/templates/
+
+# local notes, not shared
+/CLAUDE.md
+/docs/plan.md
+/docs/novelai-openapi.json
+
+# python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# scratch
+output.png
+
+# uv
+.python-version

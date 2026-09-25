@@ -1,0 +1,14 @@
+---
+name: Solo girl
+primary: true
+enabled: true
+chars:
+- caption: 'girl, '
+  x: 0.5
+  y: 0.5
+---
+1::solo, 1girl::
+
+1.1:: location, very aesthetic, masterpiece, best quality, amazing quality, year 2024, incredibly absurdres, top rated, no text, digital drawing (artwork), illustration::, 
+
+outdoors, 

@@ -6,6 +6,8 @@
    (include / exclude filter), Gelbooru reference images (refs column, lightbox compare), column drag
    reorder, collapsed columns keep their cells aligned. Session 9 (shareable): one click enqueues at most one
    cell (POST /api/generate); the Generate tab only adds artist rows; no batch fill, no batch regen.
+   Session 10: artist packs. Row-header picks (server memory, /api/picks), the export dialog (streamed zip
+   download of picks x templates), and "Import a pack" from a local .zip path, one request per artist.
    State lives in the URL hash: #<tab>[/<artist_slug>/<template_id>][?sort=&dir=&q=&show=&inc=&exc=&lmode=];
    the path part opens the lightbox, the query part is the matrix view. localStorage holds only view
    preferences: active tab, hidden columns, column order, NSFW refs shown. */
@@ -32,6 +34,7 @@ const state = {
   drawerOpen: false,
   labelEdit: null,         // slug whose row header shows the label editor
   refsAsked: new Set(),    // slugs sent to /api/refs/fetch, not finished yet ("fetching…" cells)
+  picks: new Set(),        // slugs picked for export (the server holds them; mirrored from /api/matrix, /api/picks)
   // matrix filter / sort, mirrored in the URL hash. inc / exc: label filter; lmode: inc needs "all" or "any"
   view: { sort: "name", dir: "asc", q: "", show: "all", inc: [], exc: [], lmode: "all" },
 };
@@ -91,6 +94,12 @@ function el(tag, attrs = {}, ...children) {
 function fmtDate(iso) {
   return iso ? iso.replace("T", " ").replace(/Z$/, "") : "";
 }
+function fmtBytes(n) {
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(i ? 1 : 0)} ${units[i]}`;
+}
 function debounce(fn, ms) {
   let t = null;
   return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
@@ -127,6 +136,7 @@ async function loadMatrix() {
     return;
   }
   $("#gen-refs-wrap").hidden = !state.matrix.refs.configured;
+  state.picks = new Set(state.matrix.picks || []);
   renderMatrix();
   renderLabelOptions();
   renderLabelFilter();
@@ -974,6 +984,8 @@ function visibleArtists() {
         case "single": return !a.is_combo;
         case "unlabeled": return !a.labels.length;
         case "norefs": return a.refs_eligible && !a.refs.length;
+        case "picked": return state.picks.has(a.slug);
+        case "unpicked": return !state.picks.has(a.slug);
         default: return true;
       }
     });
@@ -1053,7 +1065,7 @@ function renderMatrix() {
 
   const thead = el("thead");
   const hr = el("tr");
-  hr.append(el("th", { class: "corner" }, el("span", { class: "dim" }, "artist ╲ template")));
+  hr.append(el("th", { class: "corner" }, el("span", { class: "dim" }, "artist ╲ template"), pickControls()));
   for (const c of cols) hr.append(columnHeader(c));
   thead.append(hr);
   table.append(thead);
@@ -1088,6 +1100,7 @@ function renderMatrix() {
     `${shown === total ? total : `${shown}/${total}`} artists × ${tids.length}/${m.templates.length} columns · ${images} images · ${rated} rated` +
     (stale ? ` · ${stale} stale` : "");
   $("#mx-nsfw-wrap").hidden = !refsColumnOn();
+  renderPickInfo();
 }
 
 /* Column header: click hides / shows, drag reorders (drop on the left or right half of another header). */
@@ -1168,7 +1181,8 @@ function refreshRowHeader(a) {
 
 function renderRowHeader(a) {
   const base = isBase(a);
-  const th = el("th", { title: base ? "artist-less baseline" : "" });
+  const picked = state.picks.has(a.slug);
+  const th = el("th", { class: picked ? "picked" : "", title: base ? "artist-less baseline" : "" });
   const tag = el("span", {
     class: "tag", title: base ? "artist-less baseline" : "click: copy artist:tag · shift-click: copy bare tag",
     onclick: (ev) => { if (!base) copyText(artistTagText(a, ev.shiftKey)); },
@@ -1182,7 +1196,8 @@ function renderRowHeader(a) {
   if (!base) {
     tools.append(ratingChips(a, null),
       el("button", { class: "tool", title: a.rating && a.rating.note ? `edit note: ${a.rating.note}` : "add a note", onclick: (ev) => { ev.stopPropagation(); editNote(a); } }, "✎"),
-      el("button", { class: `tool${state.labelEdit === a.slug ? " on" : ""}`, title: "edit labels", onclick: (ev) => { ev.stopPropagation(); if (state.labelEdit === a.slug) closeRowLabels(); else openRowLabels(a); } }, "#"));
+      el("button", { class: `tool${state.labelEdit === a.slug ? " on" : ""}`, title: "edit labels", onclick: (ev) => { ev.stopPropagation(); if (state.labelEdit === a.slug) closeRowLabels(); else openRowLabels(a); } }, "#"),
+      el("button", { class: `tool pick${picked ? " on" : ""}`, title: picked ? "picked for export (click to unpick)" : "pick for export", onclick: (ev) => { ev.stopPropagation(); togglePick(a); } }, picked ? "☑ picked" : "☐ pick"));
   }
   th.append(tools);
   return th;
@@ -1232,6 +1247,235 @@ function toggleColumn(id) {
   saveHidden();
   renderMatrix();
 }
+
+// --- picks + export (artist packs) ---------------------------------------------------------
+
+/* Picks live in server memory: they survive a page reload, not a server restart. The DOM is patched in
+   place, so a "picked" filtered view does not reshuffle under the cursor. */
+async function setPicks(body) {
+  try {
+    const res = await api("/api/picks", { json: body });
+    state.picks = new Set(res.picks);
+    if (state.matrix) state.matrix.picks = res.picks;
+    renderPickInfo();
+    return true;
+  } catch (e) {
+    toast(e.message, true);
+    return false;
+  }
+}
+async function togglePick(a) {
+  if (!a || isBase(a)) return;
+  const on = state.picks.has(a.slug);
+  if (!await setPicks(on ? { remove: [a.slug] } : { add: [a.slug] })) return;
+  refreshRowHeader(a);
+  if (state.lb) renderLightboxPick();
+}
+/* The matrix corner cell, right above the row toggles; rebuilt with the table. */
+function pickControls() {
+  return el("div", { class: "corner-picks" },
+    el("span", { id: "mx-picked", title: "artists picked for export; kept until the server restarts" }),
+    el("button", { type: "button", class: "btn small", id: "mx-pick-view", title: "pick every artist the current filter shows", onclick: pickView }, "pick view"),
+    el("button", { type: "button", class: "btn small", id: "mx-pick-clear", title: "unpick everyone", onclick: clearPicks }, "clear"),
+    el("button", { type: "button", class: "btn small", id: "mx-export", title: "download the picked artists as a pack", onclick: openExport }, "export…"));
+}
+function renderPickInfo() {
+  const n = state.picks.size;
+  if (!$("#mx-picked")) return;  // before the first render
+  $("#mx-picked").textContent = `picked ${n}`;
+  $("#mx-picked").classList.toggle("dim", !n);
+  $("#mx-pick-clear").disabled = !n;
+  $("#mx-export").disabled = !n;
+}
+async function pickView() {
+  if (!state.matrix) return;
+  const slugs = visibleArtists().filter(a => !isBase(a) && !state.picks.has(a.slug)).map(a => a.slug);
+  if (!slugs.length) { toast("everyone in view is already picked"); return; }
+  if (await setPicks({ add: slugs })) {
+    renderMatrix();
+    toast(`picked ${slugs.length} more · ${state.picks.size} in total`);
+  }
+}
+async function clearPicks() {
+  const n = state.picks.size;
+  if (!n || (n >= 10 && !confirm(`Unpick all ${n} artists?`))) return;
+  if (await setPicks({ clear: true })) renderMatrix();
+}
+
+const expDlg = $("#exp");
+let expSeq = 0;
+function expTemplates() {
+  return $$("#exp-templates input:checked").map(i => i.value);
+}
+function openExport() {
+  if (!state.picks.size) { toast("pick some artists first: ☐ pick on a row, or pick view", true); return; }
+  const shown = new Set(visibleTemplateIds());
+  $("#exp-templates").replaceChildren(...orderedTemplates().map(t => el("label", { class: "check", title: t.id },
+    el("input", { type: "checkbox", value: t.id, ...(shown.has(t.id) ? { checked: "" } : {}), onchange: previewExport }),
+    t.name, el("span", { class: "dim" }, t.id))));
+  if (!$("#exp-name").value) $("#exp-name").value = `artists-${new Date().toISOString().slice(0, 10)}`;
+  $("#exp-who").textContent = `${state.picks.size} picked artist(s), plus the baseline row. Templates: the columns you have open.`;
+  expDlg.showModal();
+  previewExport();
+}
+const SKIP_WHY = { missing: "never generated", stale: "template or settings changed since", forced: "force-assigned import, its prompt doesn't match the template", "file missing": "the PNG is gone from disk", "bad tag": "the artist tag has a comma in it, so it can't be rebuilt on the other side" };
+async function previewExport() {
+  const seq = ++expSeq;
+  const tids = expTemplates();
+  const out = $("#exp-preview"), wrap = $("#exp-skipped-wrap");
+  $("#exp-go").disabled = true;
+  wrap.hidden = true;
+  if (!tids.length) { out.textContent = "tick at least one template"; return; }
+  out.classList.remove("err");
+  out.textContent = "counting…";
+  try {
+    const p = await api("/api/export/preview", { json: { templates: tids } });
+    if (seq !== expSeq) return;
+    const empty = p.picked - p.artists;
+    out.textContent = `${p.artists} artist(s) + baseline · ${p.cells} cells · ${fmtBytes(p.bytes)}` +
+      (empty ? `\n${empty} picked artist(s) have no fresh cell in these templates` : "");
+    if (p.skipped.length) {
+      wrap.hidden = false;
+      $("summary", wrap).textContent = `skipped: ${Object.entries(p.skipped_counts).map(([k, n]) => `${n} ${k}`).join(", ")}`;
+      const shown = p.skipped.slice(0, 500);
+      $("#exp-skipped").replaceChildren(...shown.map(x => el("li", { title: SKIP_WHY[x.reason] || "" },
+        `${x.slug === state.matrix.base_slug ? "baseline" : x.slug} × ${x.template}: ${x.reason}`)),
+        ...(p.skipped.length > shown.length ? [el("li", { class: "dim" }, `… and ${p.skipped.length - shown.length} more`)] : []));
+    }
+    $("#exp-go").disabled = !p.cells;
+  } catch (e) {
+    if (seq !== expSeq) return;
+    out.classList.add("err");
+    out.textContent = e.message;
+  }
+}
+$("#exp-cancel").addEventListener("click", () => expDlg.close("cancel"));
+$("#exp-all").addEventListener("click", () => { $$("#exp-templates input").forEach(i => { i.checked = true; }); previewExport(); });
+$("#exp-none").addEventListener("click", () => { $$("#exp-templates input").forEach(i => { i.checked = false; }); previewExport(); });
+/* A plain link download: the browser streams the zip to disk, nothing is buffered in JS. */
+$("#exp-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const q = new URLSearchParams();
+  for (const t of expTemplates()) q.append("templates", t);
+  q.set("name", $("#exp-name").value.trim() || "artists");
+  const link = el("a", { href: `/api/export?${q}`, download: "" });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  expDlg.close("ok");
+  toast("export started: the zip streams straight into your downloads");
+});
+
+// --- import a pack ---------------------------------------------------------------------
+
+/* inspect → templates → one request per artist. No server-side import state: stop just ends the loop,
+   and a re-run is safe (templates match by content, imported cells come back "exists"). */
+const pk = { info: null, running: false, stop: false };
+
+async function inspectPack() {
+  const path = $("#pk-path").value.trim();
+  if (!path || pk.running) return;
+  $("#pk-inspect").disabled = true;
+  try {
+    pk.info = await api("/api/import-pack/inspect", { json: { path } });
+    renderPackSummary();
+  } catch (e) {
+    pk.info = null;
+    $("#pk-summary").hidden = true;
+    toast(e.detail && typeof e.detail === "string" ? e.detail : e.message, true);
+  } finally {
+    $("#pk-inspect").disabled = false;
+  }
+}
+function renderPackSummary() {
+  const info = pk.info;
+  $("#pk-summary").hidden = false;
+  const artists = info.artists.filter(a => a.slug !== state.matrix.base_slug);
+  const known = artists.filter(a => a.known).length;
+  const kv = $("#pk-kv");
+  kv.replaceChildren();
+  const row = (k, v) => kv.append(el("dt", {}, k), el("dd", {}, v));
+  row("pack", `${info.name}${info.created_at ? ` · ${fmtDate(info.created_at)}` : ""}${info.version ? ` · nai_artists ${info.version}` : ""}`);
+  row("artists", `${artists.length}${known ? ` (${known} already in your matrix)` : ""} + baseline`);
+  row("cells", `${info.cells}${info.existing ? ` (${info.existing} already exist here)` : ""} · ${fmtBytes(info.bytes)}`);
+  const warn = $("#pk-warn");
+  warn.hidden = !info.settings_diff.length;
+  warn.textContent = info.settings_diff.length
+    ? `Their settings.toml differs from yours in: ${info.settings_diff.join(", ")}. The cells still import, marked ≠ (params mismatch).`
+    : "";
+  $("#pk-templates tbody").replaceChildren(...info.templates.map(t => el("tr", {},
+    el("td", {}, `${t.name} `, el("span", { class: "dim" }, t.id)),
+    el("td", { class: "mono" }, t.target),
+    el("td", { class: t.action === "reuse" ? "dim" : "" },
+      t.action === "reuse" ? `same prompt as your ${t.target}${t.enabled ? "" : " (disabled here: its cells won't show until you enable it)"}`
+        : t.action === "rename" ? `new; your ${t.id} has a different prompt, so it goes in as ${t.target}` : "new, added"))));
+  $("#pk-result").textContent = "";
+  $("#pk-rejected-wrap").hidden = true;
+  $("#pk-progress").hidden = true;
+  $("#pk-go").disabled = false;
+}
+function packProgress(done, total, label) {
+  const bar = $("#pk-progress");
+  bar.hidden = false;
+  $(".progress-fill", bar).style.width = `${total ? (100 * done / total) : 100}%`;
+  $("span", bar).textContent = `${done} / ${total} artists${label ? ` · ${label}` : ""}`;
+}
+async function runPackImport() {
+  const info = pk.info;
+  if (!info || pk.running) return;
+  const replace = $("#pk-replace").checked;
+  if (replace && info.existing && !confirm(`Replace ${info.existing} existing cell(s) with the pack's images? Your own baseline cells included.`)) return;
+  pk.running = true;
+  pk.stop = false;
+  $("#pk-go").disabled = true;
+  $("#pk-inspect").disabled = true;
+  $("#pk-stop").hidden = false;
+  const counts = {}, rejected = [];
+  const total = info.artists.length;
+  let done = 0, error = null;
+  const result = $("#pk-result");
+  result.classList.remove("err");
+  const show = () => {
+    result.textContent = ["imported", "replaced", "exists", "rejected"].filter(k => counts[k]).map(k => `${counts[k]} ${k}`).join(" · ");
+    const wrap = $("#pk-rejected-wrap");
+    wrap.hidden = !rejected.length;
+    $("summary", wrap).textContent = `${rejected.length} rejected cell(s)`;
+    $("#pk-rejected").replaceChildren(...rejected.slice(0, 500).map(r => el("li", {}, r)));
+  };
+  try {
+    packProgress(0, total, "templates");
+    await api("/api/import-pack/templates", { json: { path: info.path } });
+    for (const a of info.artists) {
+      if (pk.stop) break;
+      packProgress(done, total, a.slug === state.matrix.base_slug ? "baseline" : a.tags.join(" + "));
+      const r = await api("/api/import-pack/artist", { json: { path: info.path, slug: a.slug, replace } });
+      for (const [k, n] of Object.entries(r.counts)) counts[k] = (counts[k] || 0) + n;
+      for (const c of r.results) if (c.status === "rejected") rejected.push(`${a.slug} × ${c.template}: ${c.reason}`);
+      done++;
+      show();
+    }
+  } catch (e) {
+    error = e;
+  } finally {
+    pk.running = false;
+    $("#pk-stop").hidden = true;
+    $("#pk-inspect").disabled = false;
+    $("#pk-go").disabled = false;
+    packProgress(done, total, done === total ? "done" : pk.stop ? "stopped: Import again to continue" : "failed");
+    show();
+    if (error) {
+      result.classList.add("err");
+      result.textContent += `${result.textContent ? "\n" : ""}${error.message}`;
+    }
+    toast(`pack: ${done}/${total} artists${counts.imported ? `, ${counts.imported} cells imported` : ""}`, !!error);
+    await Promise.all([loadMatrix(), loadTemplates()]);
+  }
+}
+$("#pk-inspect").addEventListener("click", inspectPack);
+$("#pk-path").addEventListener("keydown", (ev) => { if (ev.key === "Enter") { ev.preventDefault(); inspectPack(); } });
+$("#pk-path").addEventListener("input", () => { if (pk.info && !pk.running) { pk.info = null; $("#pk-summary").hidden = true; } });
+$("#pk-go").addEventListener("click", runPackImport);
+$("#pk-stop").addEventListener("click", () => { pk.stop = true; $("#pk-stop").hidden = true; });
 
 // --- reference images (Gelbooru) ------------------------------------------------------
 
@@ -1371,6 +1615,7 @@ async function renderLightbox() {
   $("#lb-base").classList.toggle("on", lb.base);
   $("#lb-base").disabled = !own || isBase(own) || !hasImage(cellOf(m.base_slug, lb.template));
   $("#lb-copy").disabled = !own || isBase(own);
+  renderLightboxPick();
   $("#lb-newtpl").disabled = !hasImage(cell);
   const ownCell = own && t ? own.cells[t.id] : null;
   $("#lb-regen").disabled = !own || !t || !!(ownCell && ownCell.job);
@@ -1428,6 +1673,15 @@ async function renderLightbox() {
   }
   pr.append(el("h3", {}, "negative"), el("pre", {}, c.uc || ""));
 }
+
+function renderLightboxPick() {
+  const own = lbOwnArtist();
+  const on = !!own && state.picks.has(own.slug);
+  $("#lb-pick").disabled = !own || isBase(own);
+  $("#lb-pick").classList.toggle("on", on);
+  $("#lb-pick").textContent = on ? "picked" : "pick";
+}
+$("#lb-pick").addEventListener("click", () => togglePick(lbOwnArtist()));
 
 /* Ratings always target the lightbox's own artist (lb.slug), even while the baseline is toggled in. */
 function renderLightboxRating() {
@@ -1581,7 +1835,7 @@ $("#help-btn").addEventListener("click", toggleHelp);
 
 document.addEventListener("keydown", (ev) => {
   if (ev.target && /^(INPUT|TEXTAREA|SELECT)$/.test(ev.target.tagName)) return;
-  if (ntDlg.open) return;
+  if (ntDlg.open || expDlg.open) return;
   if (helpDlg.open) { if (ev.key === "?") { ev.preventDefault(); helpDlg.close(); } return; }
   if (ev.key === "?") { ev.preventDefault(); toggleHelp(); return; }
   if (dlg.open) {
@@ -1594,6 +1848,7 @@ document.addEventListener("keydown", (ev) => {
     else if (ev.key === "r") { ev.preventDefault(); cycleRef(); }
     else if (ev.key === "l") { const inp = $("#lb-labels .lbl-input"); if (inp) { ev.preventDefault(); inp.focus(); } }
     else if (ev.key === "c") { $("#lb-copy").click(); }
+    else if (ev.key === "p") { ev.preventDefault(); $("#lb-pick").click(); }
     else if (ev.key === "g") { $("#lb-regen").click(); }
     else if (ev.key === "n") { $("#lb-newtpl").click(); }
     else if (ev.key === "o") { const h = $("#lb-open").getAttribute("href"); if (h) window.open(h, "_blank", "noopener"); }

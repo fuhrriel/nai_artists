@@ -456,3 +456,25 @@ body.show-nsfw .lb-ref img.nsfw { cursor: default; }
 .lb-ref-thumb.on { border-color: var(--accent); }
 .lb-ref-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .lb-ref-thumb .n { position: absolute; right: 2px; bottom: 2px; font-size: 10px; background: rgba(0,0,0,0.7); color: var(--fg); padding: 1px 4px; border-radius: 3px; }
+
+/* --- session 10: artist packs (picks, export dialog, import a pack) ------------------ */
+.corner-picks { display: flex; align-items: center; gap: 4px; margin-top: 6px; font-size: 12px; font-weight: 400; }
+.corner-picks #mx-picked { margin-right: 2px; }
+#mx-picked:not(.dim) { color: var(--accent); font-weight: 600; }
+.matrix tbody th.picked { box-shadow: inset 3px 0 0 var(--accent); }
+.row-tools .tool.pick { margin-left: auto; white-space: nowrap; }
+.row-tools .tool.pick.on { color: var(--accent); border-color: var(--accent); }
+.modal.wide { width: 640px; }
+.exp-templates { display: flex; flex-wrap: wrap; gap: 6px 14px; max-height: 40vh; overflow: auto; }
+.exp-templates .check .dim { font-size: 11px; }
+details.skipped { font-size: 12px; color: var(--dim); }
+details.skipped summary { cursor: pointer; }
+details.skipped ul { margin: 6px 0 0; padding-left: 18px; max-height: 30vh; overflow: auto; }
+.grow { flex: 1; min-width: 0; }
+.pk-summary { display: flex; flex-direction: column; gap: 10px; }
+.warnbox { padding: 6px 10px; border: 1px solid var(--warn); border-radius: 6px; color: var(--warn); background: rgba(224,175,104,0.08); font-size: 13px; }
+.warnbox[hidden] { display: none; }
+.progress { position: relative; height: 22px; border-radius: 6px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+.progress[hidden] { display: none; }
+.progress-fill { position: absolute; inset: 0; width: 0; background: var(--accent); opacity: 0.45; transition: width 0.2s; }
+.progress span { position: relative; display: block; text-align: center; line-height: 20px; font-size: 12px; }

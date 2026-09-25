@@ -40,6 +40,8 @@
           <option value="single">singles only</option>
           <option value="unlabeled">no labels</option>
           <option value="norefs">no refs</option>
+          <option value="picked">picked for export</option>
+          <option value="unpicked">not picked</option>
         </select>
       </label>
       <span class="label-filter">
@@ -106,7 +108,7 @@
   <section id="tab-import" class="tab">
     <div class="page">
       <div class="panel">
-        <h2>Import</h2>
+        <h2>Import PNGs</h2>
         <div class="drop" id="drop">
           <p>drop PNGs here, or <label class="link">choose files<input type="file" id="imp-files" multiple accept="image/png,.png" hidden></label></p>
           <p class="dim small" id="imp-count">no files selected</p>
@@ -125,6 +127,31 @@
           <tbody></tbody>
         </table>
         <p class="dim small">Unmatched files land in <code>data/inbox/</code> untouched. Wrong seed / size is accepted and shown as <code>≠</code>. A file without <code>artist:</code> tokens is the baseline cell of its template.</p>
+      </div>
+      <div class="panel">
+        <h2>Import a pack</h2>
+        <p class="dim small">A pack is a <code>.zip</code> someone exported from this tool (Matrix → export…). Paste its path on this computer: it is read in place, no upload, no unzipping.</p>
+        <div class="row">
+          <input type="text" id="pk-path" class="grow" placeholder="~/Downloads/artists.zip  ·  C:\Users\you\Downloads\artists.zip" spellcheck="false" autocomplete="off">
+          <button type="button" class="btn" id="pk-inspect">inspect</button>
+        </div>
+        <div id="pk-summary" class="pk-summary" hidden>
+          <dl class="kv" id="pk-kv"></dl>
+          <div id="pk-warn" class="warnbox" hidden></div>
+          <table class="list" id="pk-templates">
+            <thead><tr><th>pack template</th><th>here</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div class="row wrap">
+            <label class="check"><input type="checkbox" id="pk-replace"> replace existing cells (your own included)</label>
+            <button type="button" class="btn primary" id="pk-go">Import</button>
+            <button type="button" class="btn" id="pk-stop" hidden>stop</button>
+          </div>
+          <div class="progress" id="pk-progress" hidden><div class="progress-fill"></div><span></span></div>
+          <div id="pk-result" class="result"></div>
+          <details id="pk-rejected-wrap" class="skipped" hidden><summary></summary><ul id="pk-rejected"></ul></details>
+        </div>
+        <p class="dim small">Templates are matched by content: one you already have (under any id) is reused, otherwise it is added (as <code>id-xxxxxx</code> if the id is taken). Existing cells are kept unless you tick replace. Cells whose PNG doesn't match the pack's manifest are rejected, one by one.</p>
       </div>
     </div>
   </section>
@@ -183,6 +210,7 @@
         <div class="lb-artist" id="lb-artist"></div>
         <div class="lb-actions">
           <button class="btn" id="lb-copy" title="copy artist:tag">copy tag</button>
+          <button class="btn" id="lb-pick" title="pick this artist for export (p)">pick</button>
           <button class="btn" id="lb-base" title="toggle baseline (b)">baseline</button>
           <button class="btn" id="lb-regen" title="regenerate this cell (g)">regenerate</button>
           <button class="btn" id="lb-newtpl" title="new template from this image's prompt (n)">new template</button>
@@ -195,7 +223,7 @@
       <div class="lb-refs" id="lb-refs" hidden></div>
       <dl class="lb-meta" id="lb-meta"></dl>
       <div class="lb-prompts" id="lb-prompts"></div>
-      <div class="lb-keys dim">← → templates · ↑ ↓ artists · b baseline · r refs · l labels · c copy · − 0 1 2 rate cell · x clear · g regenerate · n new template · o png · ? help</div>
+      <div class="lb-keys dim">← → templates · ↑ ↓ artists · b baseline · r refs · l labels · c copy · p pick · − 0 1 2 rate cell · x clear · g regenerate · n new template · o png · ? help</div>
     </aside>
   </div>
 </dialog>
@@ -211,6 +239,25 @@
     <div class="row">
       <button type="submit" class="btn primary" value="ok">create</button>
       <button type="button" class="btn" id="nt-cancel">cancel</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="exp" class="modal wide">
+  <form method="dialog" id="exp-form">
+    <h2>Export a pack</h2>
+    <p class="dim small" id="exp-who"></p>
+    <fieldset class="field">
+      <legend>templates <button type="button" class="btn small" id="exp-all">all</button> <button type="button" class="btn small" id="exp-none">none</button></legend>
+      <div id="exp-templates" class="exp-templates"></div>
+    </fieldset>
+    <label class="field"><span>pack name</span><input id="exp-name" autocomplete="off" spellcheck="false"></label>
+    <div id="exp-preview" class="result"></div>
+    <details id="exp-skipped-wrap" class="skipped" hidden><summary></summary><ul id="exp-skipped"></ul></details>
+    <p class="dim small">In the pack: each cell's PNG byte for byte (prompt and settings metadata intact), the templates, and your generation settings for comparison. The baseline row always comes along. Not in it: labels, ratings, notes, refs, thumbnails, unpicked artists. Only fresh cells go in; missing, stale, force-assigned and file-missing ones are skipped.</p>
+    <div class="row">
+      <button type="submit" class="btn primary" id="exp-go" disabled>Download</button>
+      <button type="button" class="btn" id="exp-cancel">cancel</button>
     </div>
   </form>
 </dialog>
@@ -233,6 +280,7 @@
     <tr><td>drag column header</td><td>move the column (columns ↺ resets order and visibility)</td></tr>
     <tr><td># on a row</td><td>edit its labels · click a label: include it in the filter, shift-click: exclude</td></tr>
     <tr><td>refs column</td><td>top-scored Gelbooru posts; click one to compare it in the lightbox</td></tr>
+    <tr><td>☐ pick on a row</td><td>pick the artist for export · top-left corner: pick view (everyone the filter shows), clear, export…</td></tr>
     <tr><td>⟳ on a cell</td><td>generate that one image · missing: enqueue · stale: regenerate in place · fresh: delete + regenerate (asks)</td></tr>
     <tr><th colspan="2">lightbox</th></tr>
     <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>same artist, other templates</td></tr>
@@ -243,6 +291,7 @@
     <tr><td><kbd>−</kbd> <kbd>0</kbd> <kbd>1</kbd> <kbd>2</kbd></td><td>rate this cell −1 … +2 (same key again clears)</td></tr>
     <tr><td><kbd>x</kbd></td><td>clear the cell rating</td></tr>
     <tr><td><kbd>c</kbd></td><td>copy the tag</td></tr>
+    <tr><td><kbd>p</kbd></td><td>pick / unpick this artist for export</td></tr>
     <tr><td><kbd>g</kbd></td><td>regenerate this cell</td></tr>
     <tr><td><kbd>n</kbd></td><td>new template from this image</td></tr>
     <tr><td><kbd>o</kbd></td><td>open the PNG in a new tab</td></tr>

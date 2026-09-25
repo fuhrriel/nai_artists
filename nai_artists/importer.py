@@ -24,6 +24,8 @@ from .thumbs import make_thumb
 FIXED_PARAMS = {"cfg_rescale": 0.0, "uncond_scale": 0.0, "sm": False, "sm_dyn": False,
                 "dynamic_thresholding": False, "prefer_brownian": True}
 # Comment keys kept in images.meta. No prompt, no uc, no v4_*: prompts never go in SQLite.
+# mismatch_note prefix of a force-assigned cell (its prompt matches no template exactly); packs skip these.
+FORCED_NOTE = "prompt differs from template"
 META_KEYS = ("seed", "width", "height", "steps", "scale", "sampler", "noise_schedule", "cfg_rescale",
              "uncond_scale", "sm", "sm_dyn", "dynamic_thresholding", "prefer_brownian", "model_name", "model_hash")
 
@@ -118,7 +120,7 @@ def register_image(
     pm, note = params_check(settings, comment)
     if not exact:
         pm = False
-        note = "; ".join(n for n in ("prompt differs from template", extra_note, note) if n)
+        note = "; ".join(n for n in (FORCED_NOTE, extra_note, note) if n)
     result = ImportResult(src, "imported", template.id, list(artists), slug, exact, pm, note, dest=dest)
     # A cell "exists" if the DB has it OR the file is already on disk (e.g. generated before the DB was
     # created). Never clobber either without replace=True.
@@ -196,6 +198,6 @@ def import_png(
     if dry_run:
         pm, note = params_check(settings, comment)
         if not exact:
-            pm, note = False, "prompt differs from template" + (f"; {note}" if note else "")
+            pm, note = False, FORCED_NOTE + (f"; {note}" if note else "")
         return ImportResult(src, "dry_run", target.id, m.artists, config.combo_slug(m.artists), exact, pm, note, diffs=m.diffs)
     return register_image(conn, settings, target, m.artists, src, comment, exact=exact, replace=replace, extra_note=extra)

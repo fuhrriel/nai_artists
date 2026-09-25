@@ -237,9 +237,12 @@ def render_front_matter(name: str, primary: bool, enabled: bool, chars: list[Cha
     return yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, default_flow_style=False)
 
 
+def template_text(name: str, body: str, chars=(), primary=False, enabled=True, sort=None) -> str:
+    return f"{FRONT_MATTER_DELIM}\n{render_front_matter(name, primary, enabled, chars, sort)}{FRONT_MATTER_DELIM}\n{body}\n"
+
+
 def write_template(path: Path, name: str, body: str, chars=(), primary=False, enabled=True, sort=None) -> None:
-    text = f"{FRONT_MATTER_DELIM}\n{render_front_matter(name, primary, enabled, chars, sort)}{FRONT_MATTER_DELIM}\n{body}\n"
-    path.write_text(text, encoding="utf-8", newline="\n")
+    path.write_text(template_text(name, body, chars, primary, enabled, sort), encoding="utf-8", newline="\n")
 
 
 # --- prompt assembly -------------------------------------------------------

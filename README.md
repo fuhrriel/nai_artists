@@ -95,7 +95,8 @@ Tabs:
   rows; their cells start out missing until you click them. Optionally fetches Gelbooru refs for new single
   artists. Also shows the battery gauge.
 - **Import**: drop PNGs generated in the NovelAI UI. The prompt is matched against templates, artists are read
-  from the `artist:` tokens. Unmatched files land in `data/inbox/` untouched.
+  from the `artist:` tokens. Unmatched files land in `data/inbox/` untouched. Packs from other people are
+  imported here too (see [Sharing artists](#sharing-artists)).
 - **Templates**: enable / primary toggles, stale counts, and the settings dump. Prompt bodies are edited in
   your editor, not here.
 
@@ -159,6 +160,38 @@ The easiest way to make one: generate an image in the NovelAI UI, then either im
 
 Editing a body or any generation setting changes the template hash. Images generated under the old hash show a
 `stale` badge; clicking ⟳ on such a cell regenerates it in place.
+
+## Sharing artists
+
+The expensive part of this tool is the battery you already spent. A **pack** hands some of it to someone else:
+a `.zip` holding the chosen artists' images, the templates they were made from, and your generation settings for
+comparison.
+
+**Export.** In the matrix, `☐ pick` on a row picks that artist (`p` does the same in the lightbox). The corner
+cell top left has `pick view` (everyone the current filter / labels / `show` lets through), `clear` and
+`export…`. Picks are kept until the server restarts. The export dialog starts with the columns you have open,
+shows what goes in and how big it is, and downloads the zip.
+
+- In the pack: each cell's PNG byte for byte (prompt and settings metadata intact), the templates (as
+  non-primary), the artist-less baseline row for every exported template, and your `settings.toml` minus
+  `[pacing]`, `[battery]` and `[refs]`.
+- Not in the pack: labels, ratings, notes, Gelbooru refs, thumbnails, the database, unpicked artists.
+- Only fresh cells go in. Missing, stale (template or settings changed since), force-assigned and file-missing
+  cells are skipped and listed, because they wouldn't match the template on the other side.
+
+**Import.** Import tab → "Import a pack". Paste the path of the `.zip` (it is read in place, no need to unzip it),
+`inspect`, check the summary, `Import`. The import runs one artist at a time and can be stopped and run again:
+cells that are already there come back as `exists`.
+
+- Templates are matched by prompt, not by name. If you already have the same prompt under any id, yours is
+  used. Otherwise the pack's template is added, as `<id>-xxxxxx` if you already have a different template with
+  that id.
+- If the pack's settings differ from yours (another seed, another negative…), the summary says which keys differ,
+  and those cells get the `≠` badge like any mismatched import. Your settings are never changed.
+- Existing cells, your own baseline included, are kept unless you tick "replace".
+- A pack is untrusted input. Anything that doesn't add up (paths outside the three known folders, links, a PNG
+  whose checksum or prompt doesn't match the manifest) is refused, the whole pack or that one cell, before
+  anything is written.
 
 ## Data
 

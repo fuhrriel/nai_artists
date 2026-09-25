@@ -8,14 +8,15 @@
 
 from __future__ import annotations
 
-import gzip
 import json
+import zlib
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
 
 STEALTH_MAGIC = b"stealth_pngcomp"
+STEALTH_MAX_BYTES = 8 << 20  # decompressed payload cap: a real Comment is a few KiB, a gzip bomb is not
 _LSB_TABLE = bytes.maketrans(bytes(range(256)), b"".join(b"1" if i & 1 else b"0" for i in range(256)))
 
 
@@ -41,7 +42,11 @@ def _decode_stealth(im: Image.Image) -> dict[str, Any] | None:
         return None
     length = int.from_bytes(take(magic_bits, 32), "big")
     payload = take(magic_bits + 32, length)
-    data = json.loads(gzip.decompress(payload).decode("utf-8"))
+    d = zlib.decompressobj(wbits=31)  # gzip container
+    raw = d.decompress(payload, STEALTH_MAX_BYTES)
+    if d.unconsumed_tail:
+        raise ValueError("stealth payload too large")
+    data = json.loads(raw.decode("utf-8"))
     return data if isinstance(data, dict) else None
 
 
@@ -58,7 +63,7 @@ def read_comment(path: Path | str) -> dict[str, Any] | None:
                 pass
         try:
             stealth = _decode_stealth(im)
-        except (ValueError, OSError, gzip.BadGzipFile):
+        except (ValueError, OSError, zlib.error):
             stealth = None
     if not stealth:
         return None

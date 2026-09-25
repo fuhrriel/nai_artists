@@ -12,11 +12,12 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 from PIL import Image, PngImagePlugin
 
-from nai_artists import config, db
+from nai_artists import config, db, packs
 from nai_artists.app import create_app
+from nai_artists.importer import import_png
 from nai_artists.meta import read_comment
 from nai_artists.nai import NAIError
-from nai_artists.templates import create_from_image, get_template, load_settings
+from nai_artists.templates import create_from_image, get_template, load_settings, load_templates
 from tests.conftest import DUO, ROOT, SOLO
 
 FAST_PACING = """
@@ -443,11 +444,16 @@ def test_startup_drops_leftover_jobs(sandbox, fake):
         assert "dropped by server restart" in st["jobs"][0]["error"] and "interrupted" in st["jobs"][1]["error"]
 
 
-def test_no_route_enqueues_more_than_one_job(client, fake):
+def test_no_route_enqueues_more_than_one_job(client, fake, sandbox):
     """The public invariant: one request -> at most one generation job. A new route fails this test until it
     is listed here, so nobody adds a batch route by accident."""
     add(client, "fuhrriel", "a + b")
     client.post("/api/jobs/pause")
+    s = load_settings()  # a real pack (fuhrriel x duo) for the import-pack routes
+    import_png(db.connect(), s, load_templates(s), DUO)
+    pack = sandbox / "pack.zip"
+    pack.write_bytes(b"".join(packs.stream_pack(packs.export_plan(db.connect(), load_templates(s), {"fuhrriel"}, ["duo"]), s, "t")))
+    body = {"path": str(pack)}
     png = [("files", (SOLO.name, SOLO.read_bytes(), "image/png"))]
     calls = {
         ("POST", "/api/artists"): lambda: client.post("/api/artists", json={"artists": ["p", "q + r", "fuhrriel"]}),
@@ -459,6 +465,12 @@ def test_no_route_enqueues_more_than_one_job(client, fake):
         ("POST", "/api/templates/from-image"): lambda: client.post(
             "/api/templates/from-image", data={"id": "solo2"}, files={"file": (SOLO.name, SOLO.read_bytes(), "image/png")}),
         ("POST", "/api/refs/fetch"): lambda: client.post("/api/refs/fetch", json={"artists": "all"}),
+        ("POST", "/api/picks"): lambda: client.post("/api/picks", json={"add": ["fuhrriel", "a+b"]}),
+        ("POST", "/api/export/preview"): lambda: client.post("/api/export/preview", json={"templates": ["1girl", "duo"]}),
+        ("GET", "/api/export"): lambda: client.get("/api/export?templates=1girl&templates=duo"),
+        ("POST", "/api/import-pack/inspect"): lambda: client.post("/api/import-pack/inspect", json=body),
+        ("POST", "/api/import-pack/templates"): lambda: client.post("/api/import-pack/templates", json=body),
+        ("POST", "/api/import-pack/artist"): lambda: client.post("/api/import-pack/artist", json={**body, "slug": "fuhrriel", "replace": True}),
         ("GET", "/api/matrix"): lambda: client.get("/api/matrix"),
         ("GET", "/api/artists/{slug}"): lambda: client.get("/api/artists/fuhrriel"),
         ("GET", "/api/images/{image_id}/meta"): lambda: client.get("/api/images/1/meta"),

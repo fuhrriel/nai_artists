@@ -14,6 +14,7 @@ import asyncio
 import shutil
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 
@@ -22,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db
+from . import config, db, packs
 from .importer import ImportResult, cell_paths, import_png, register_image
 from .meta import read_comment
 from .nai import NAIError, anlas_mode, anlas_short, battery_low
@@ -73,6 +74,27 @@ class LabelsBody(BaseModel):
 class RefsFetchBody(BaseModel):
     artists: list[str] | Literal["missing", "all"] = "missing"  # slugs; "missing" = never fetched
     override: str | None = None  # booru tag to search for (exactly one artist); "" clears it
+
+
+class PicksBody(BaseModel):
+    """Artists picked for export. Order: clear, then remove, then add."""
+    add: list[str] = Field(default_factory=list)  # slugs
+    remove: list[str] = Field(default_factory=list)
+    clear: bool = False
+
+
+class ExportBody(BaseModel):
+    templates: list[str] = Field(default_factory=list)
+
+
+class PackPathBody(BaseModel):
+    path: str  # a local .zip, as pasted into the Import tab
+
+
+class PackArtistBody(BaseModel):
+    path: str
+    slug: str  # an artist slug from the pack's manifest, `_base` included
+    replace: bool = False
 
 
 class TemplatePatch(BaseModel):
@@ -205,6 +227,7 @@ def create_app(client_factory=None, booru_factory=None) -> FastAPI:
             await q.stop()
 
     app = FastAPI(title="nai_artists", lifespan=lifespan)
+    app.state.picks = set()  # slugs picked for export: server memory, survives page reloads, not restarts
 
     @app.exception_handler(TemplateError)
     async def _template_error(_: Request, e: TemplateError):
@@ -256,7 +279,7 @@ def create_app(client_factory=None, booru_factory=None) -> FastAPI:
                 **artist_extras(a, labels, refs, fetches),
             })
         return {"templates": [template_dict(t) for t in templates], "artists": artists,
-                "base_slug": config.BASE_SLUG, "queue": queue_summary(conn),
+                "base_slug": config.BASE_SLUG, "queue": queue_summary(conn), "picks": sorted(app.state.picks),
                 "labels": db.label_counts(conn), "refs": app.state.refs.state()}
 
     def queue_summary(conn) -> dict[str, Any]:
@@ -506,6 +529,68 @@ def create_app(client_factory=None, booru_factory=None) -> FastAPI:
             raise HTTPException(400, "nothing to change")
         update_front_matter(t.path, changes)
         return template_dict(get_template(template_id, settings))
+
+    # --- artist packs (packs.py): export picked artists, import someone else's -----
+
+    @app.post("/api/picks")
+    async def picks(body: PicksBody):
+        chosen: set[str] = app.state.picks
+        known = {a["slug"] for a in db.list_artists(db.connect())}
+        bad = [s for s in body.add if s not in known or s == config.BASE_SLUG]
+        if bad:
+            raise HTTPException(400, f"cannot pick {', '.join(bad[:5])}: unknown or the baseline (always exported)")
+        if body.clear:
+            chosen.clear()
+        chosen.difference_update(body.remove)
+        chosen.update(body.add)
+        return {"picks": sorted(chosen)}
+
+    def export_plan(template_ids: list[str]) -> packs.ExportPlan:
+        return packs.export_plan(db.connect(), load_templates(load_settings()), set(app.state.picks), template_ids)
+
+    @app.post("/api/export/preview")
+    async def export_preview(body: ExportBody):
+        plan = await asyncio.to_thread(export_plan, body.templates)
+        return {**plan.summary(), "picked": len(app.state.picks)}
+
+    @app.get("/api/export")
+    async def export(templates: list[str] = Query([]), name: str = "artists"):
+        """The pack as a streamed zip download: picked artists + the baseline x `templates`."""
+        if not app.state.picks:
+            raise HTTPException(400, "pick at least one artist")
+        plan = await asyncio.to_thread(export_plan, templates)
+        if not plan.cells:
+            raise HTTPException(400, "nothing to export: none of those cells is fresh")
+        return StreamingResponse(
+            packs.stream_pack(plan, load_settings(), name.strip()[:200] or "artists"), media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{packs.file_name(name)}"'},
+        )
+
+    def with_pack(path: str, fn):
+        """Open + validate the pack, run fn(conn, settings, templates, pack) in a worker thread."""
+        def run():
+            settings = load_settings()
+            with packs.open_pack(path) as pack:
+                return fn(db.connect(), settings, load_templates(settings), pack)
+        return asyncio.to_thread(run)
+
+    @app.post("/api/import-pack/inspect")
+    async def pack_inspect(body: PackPathBody):
+        return await with_pack(body.path, packs.inspect)
+
+    @app.post("/api/import-pack/templates")
+    async def pack_templates(body: PackPathBody):
+        plan = await with_pack(body.path, lambda conn, settings, templates, pack: packs.install_templates(pack, templates))
+        return {"templates": [asdict(a) for a in plan]}
+
+    @app.post("/api/import-pack/artist")
+    async def pack_artist(body: PackArtistBody):
+        results = await with_pack(body.path, lambda conn, settings, templates, pack: packs.import_artist(
+            conn, settings, templates, pack, body.slug, replace=body.replace))
+        counts: dict[str, int] = {}
+        for r in results:
+            counts[r.status] = counts.get(r.status, 0) + 1
+        return {"slug": body.slug, "results": [asdict(r) for r in results], "counts": counts}
 
     # --- ratings -----------------------------------------------------------
 

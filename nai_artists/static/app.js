@@ -1188,13 +1188,15 @@ function renderRowHeader(a) {
   return th;
 }
 
-function enqueueButton(a, t, cell) {
-  return el("button", { class: "enq", title: `generate ${artistLabel(a)} × ${t.id}`, onclick: (ev) => { ev.stopPropagation(); generateCell(a, t, cell); } }, "⟳");
+/* Covers the whole empty cell, so it is easy to hit. Still one click = one image. */
+function enqueueButton(a, t, cell, label) {
+  return el("button", { class: "enq big", title: `generate ${artistLabel(a)} × ${t.id}`, onclick: (ev) => { ev.stopPropagation(); generateCell(a, t, cell); } },
+    el("span", { class: "sym" }, "⟳"), el("span", { class: "lbl" }, label));
 }
 
 function renderCell(a, t, cell) {
   if (!cell) {
-    return el("div", { class: "cell missing", title: `${a.slug} / ${t.id}: not generated` }, "missing", enqueueButton(a, t));
+    return el("div", { class: "cell missing", title: `${a.slug} / ${t.id}: not generated` }, enqueueButton(a, t, undefined, "missing"));
   }
   if (!cell.image_id) {  // pending job, no image yet
     const j = cell.job || {};
@@ -1202,7 +1204,7 @@ function renderCell(a, t, cell) {
   }
   const box = el("div", { class: "cell" + (cell.file_missing ? " missing" : " has-img") + (cell.stale ? " stale" : "") });
   if (cell.file_missing) {
-    box.append("file missing", enqueueButton(a, t, cell));
+    box.append(enqueueButton(a, t, cell, "file missing"));
   } else {
     box.append(el("img", { loading: "lazy", src: fileUrl(cell, true), alt: `${a.slug} / ${t.id}` }));
     box.addEventListener("click", () => openLightbox(a.slug, t.id));
